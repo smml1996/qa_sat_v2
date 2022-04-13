@@ -1,7 +1,9 @@
 from typing import Dict, List, Tuple, Set
 from enum import Enum
 from dimod import BinaryQuadraticModel, Vartype
-
+from dwave.system import DWaveSampler, FixedEmbeddingComposite
+from greedy import SteepestDescentComposite
+from dwave.preprocessing.lower_bounds import roof_duality
 
 class GateType(Enum):
     OR = 1
@@ -17,6 +19,19 @@ def evaluate_clause(result: Dict[int, int], clause: List[int]) -> bool:
             val = not val
         clause_value = clause_value or val
     return clause_value
+
+def evaluate_clauses(result, clauses):
+    answer = True
+    for clause in clauses:
+        answer = answer and evaluate_clause(result, clause)
+    return answer
+
+def get_false_clauses(result, clauses):
+    answer = []
+    for clause in clauses:
+        if not evaluate_clause(result, clause):
+            answer.append(clause)
+    return answer
 
 def create_all_variables(variables: Set[int]) -> BinaryQuadraticModel:
     bqm = BinaryQuadraticModel(Vartype.BINARY)
@@ -78,13 +93,13 @@ def logic_or(bqm: BinaryQuadraticModel, variables: Set[int], x1: int, x2: int) -
     else:
         assert(x1 < 0 and x2 < 0)
         # compute NAND
-        bqm.add_variable(abs(x1), -4)
-        bqm.add_variable(abs(x2), -4)
-        bqm.add_variable(res, -6)
-        bqm.add_interaction(abs(x1), abs(x2), 2)
-        bqm.add_interaction(abs(x1), res, 4)
-        bqm.add_interaction(abs(x2), res, 4)
-        bqm.offset += 6
+        bqm.add_variable(abs(x1), -4/2)
+        bqm.add_variable(abs(x2), -4/2)
+        bqm.add_variable(res, -6/2)
+        bqm.add_interaction(abs(x1), abs(x2), 2/2)
+        bqm.add_interaction(abs(x1), res, 4/2)
+        bqm.add_interaction(abs(x2), res, 4/2)
+        bqm.offset += 6/2
         gate_type = GateType.NAND
 
     return res, gate_type
@@ -178,3 +193,12 @@ def evaluate_cnf_formula(values: Dict[int, int], or_gates: Dict[int, Tuple[GateT
     assert len(bqm.variables) == len(all_values.keys())
     print(all_values)
     return bqm.energy(all_values)
+
+
+def get_greedy_quantum_sampler(embedding=None):
+    sampler = SteepestDescentComposite(
+        FixedEmbeddingComposite(DWaveSampler(solver={"name": "Advantage_system4.1"}), embedding))
+    return sampler
+
+def minimize_qubo(bqm):
+    return roof_duality(bqm)
