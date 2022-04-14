@@ -97,3 +97,10 @@ def set_logic_var_annealing_offsets(embedding, qubit_offsets, num_variables, get
         if logic_var <= num_variables:
             for c in chain:
                 qubit_offsets[c] = get_offset(qpu_offsets, c)
+
+def find_qubit(physical_var, embedding):
+    for (logic_var, chain) in embedding.items():
+        for c in chain:
+            if c == physical_var:
+                return logic_var
+    return -1
