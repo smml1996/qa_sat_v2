@@ -104,3 +104,4 @@ def find_qubit(physical_var, embedding):
             if c == physical_var:
                 return logic_var
     return -1
+

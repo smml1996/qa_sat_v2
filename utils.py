@@ -1,4 +1,4 @@
-from typing import Dict, List, Tuple, Set
+from typing import Dict, List, Tuple, Set, Any
 from enum import Enum
 from dimod import BinaryQuadraticModel, Vartype
 from dwave.system import DWaveSampler, FixedEmbeddingComposite
@@ -39,15 +39,15 @@ def create_all_variables(variables: Set[int]) -> BinaryQuadraticModel:
         bqm.add_variable(var)
     return bqm
 
-def matriarch8(bqm: BinaryQuadraticModel, x1: int, x2: int, res: int) -> None:
+def matriarch8(bqm: BinaryQuadraticModel, x1: int, x2: int, res: int,x12, x21, x13, x31, x23, x32) -> None:
     assert (x1 > 0 and x2 > 0)
     bqm.add_variable(x1, 4)
     bqm.add_variable(x2, -2)
     bqm.add_variable(res, -2)
 
-    bqm.add_interaction(x1, x2, -2)
-    bqm.add_interaction(x1, res, -4)
-    bqm.add_interaction(x2, res, 4)
+    bqm.add_interaction(x12, x21, -2)
+    bqm.add_interaction(x13, x31, -4)
+    bqm.add_interaction(x23, x32, 4)
 
     bqm.offset += 2
 
@@ -93,50 +93,79 @@ def logic_or(bqm: BinaryQuadraticModel, variables: Set[int], x1: int, x2: int) -
     else:
         assert(x1 < 0 and x2 < 0)
         # compute NAND
-        bqm.add_variable(abs(x1), -4/2)
-        bqm.add_variable(abs(x2), -4/2)
-        bqm.add_variable(res, -6/2)
-        bqm.add_interaction(abs(x1), abs(x2), 2/2)
-        bqm.add_interaction(abs(x1), res, 4/2)
-        bqm.add_interaction(abs(x2), res, 4/2)
-        bqm.offset += 6/2
+        bqm.add_variable(abs(x1), -4)
+        bqm.add_variable(abs(x2), -4)
+        bqm.add_variable(res, -6)
+        bqm.add_interaction(abs(x1), abs(x2), 2)
+        bqm.add_interaction(abs(x1), res, 4)
+        bqm.add_interaction(abs(x2), res, 4)
+        bqm.offset += 6
         gate_type = GateType.NAND
 
     return res, gate_type
 
-def clause_to_bqm(bqm: BinaryQuadraticModel, variables: Set[int], clause: List[int]) \
-        -> Tuple[int, Dict[int, Tuple[GateType, int, int]]]:
+def only_one_true(vars) -> BinaryQuadraticModel:
+    assert(len(vars) == 5)
+    bqm = BinaryQuadraticModel(Vartype.BINARY)
+
+    bqm.offset = 2
+
+    for var in vars:
+        bqm.add_variable(abs(var), -2)
+
+    for i in range(len(vars)):
+        for j in range(i+1,len(vars)):
+            bqm.add_interaction(abs(vars[i]), abs(vars[j]),4)
+    return bqm
+
+def clause_to_bqm(bqm: BinaryQuadraticModel, variables: Set[int], clause: List[int], clause_index=None) \
+        -> Tuple[Any, Dict[int, Tuple[GateType, int, int]], Dict[int, int]]:
+
+    if clause_index == None:
+        raise Exception("clause index is None")
+
     if len(clause) == 0:
         raise Exception("clause has length 0")
 
+
     or_result_vars = dict()
+    res_vars_to_clause_index = dict()
+
+    if len(clause) == 5:
+        bqm.update(only_one_true(clause))
+        return None, or_result_vars, res_vars_to_clause_index
 
     temp, gate_type = logic_or(bqm, variables, clause[0], clause[1])
     or_result_vars[temp] = (gate_type, clause[0], clause[1])
+    res_vars_to_clause_index[temp] = clause_index
 
     for x in clause[2:]:
         prev = temp
         temp, gate_type = logic_or(bqm, variables, prev, x)
         or_result_vars[temp] = (gate_type, prev, x)
+        res_vars_to_clause_index[temp] = clause_index
 
     # the clause should evaluate to true
     bqm.fix_variable(temp, 1)
     ## fix_variable(bqm, variables, temp, True)
 
-    return temp, or_result_vars
+    return temp, or_result_vars, res_vars_to_clause_index
 
 def cnf_to_bqm(variables: Set[int], clauses: List[List[int]]) \
-        -> Tuple[BinaryQuadraticModel, Dict[int, Tuple[GateType, int, int]], List[int]]:
+        -> Tuple[BinaryQuadraticModel, Dict[int, Tuple[GateType, int, int]], List[int], Dict[int, int]]:
     bqm: BinaryQuadraticModel = create_all_variables(variables)
     or_result_vars: Dict[int, Tuple[GateType, int, int]] = dict()
+    res_vars_to_clause_index: Dict[int, int] = dict()
 
     clauses_qubits: List[int] = []
-    for clause in clauses:
-        clause_qubit, temp_or_result_vars = clause_to_bqm(bqm, variables, clause)
-        clauses_qubits.append(clause_qubit)
+    for (index, clause) in enumerate(clauses):
+        clause_qubit, temp_or_result_vars, temp_res_vars_to_clause = clause_to_bqm(bqm, variables, clause, index)
+        if clause_qubit is not None:
+            clauses_qubits.append(clause_qubit)
         or_result_vars.update(temp_or_result_vars)
+        res_vars_to_clause_index.update(temp_res_vars_to_clause)
 
-    return bqm, or_result_vars, clauses_qubits
+    return bqm, or_result_vars, clauses_qubits, res_vars_to_clause_index
 
 
 def load_cnf(path: str) -> Tuple[int, int, Set[int], List[List[int]]]:
@@ -183,15 +212,18 @@ def evaluate_gate(gate_type: GateType, x1: bool, x2: bool) -> bool:
         return x or (not negated)
 
 
-def evaluate_cnf_formula(values: Dict[int, int], or_gates: Dict[int, Tuple[GateType, int, int]], bqm: BinaryQuadraticModel) -> float:
-    all_values =  values.copy()
+def get_qubits_values(values, or_gates, bqm):
+    all_values = values.copy()
     for i in bqm.variables:
         if i not in all_values.keys():
             gate_type, x1, x2 = or_gates[i]
             all_values[i] = int(evaluate_gate(gate_type, bool(all_values[abs(x1)]), bool(all_values[abs(x2)])))
 
+    return all_values
+def evaluate_cnf_formula(values: Dict[int, int], or_gates: Dict[int, Tuple[GateType, int, int]], bqm: BinaryQuadraticModel) -> float:
+
+    all_values = get_qubits_values(values, or_gates, bqm)
     assert len(bqm.variables) == len(all_values.keys())
-    print(all_values)
     return bqm.energy(all_values)
 
 
@@ -202,3 +234,24 @@ def get_greedy_quantum_sampler(embedding=None):
 
 def minimize_qubo(bqm):
     return roof_duality(bqm)
+
+
+def get_avg_energy(sampleset):
+    energies = []
+    for s in sampleset.record:
+        energies.append(s[1])
+    return round(sum(energies)/len(energies), 2)
+
+def only_one_true(vars) -> BinaryQuadraticModel:
+    assert(len(vars) == 5)
+    bqm = BinaryQuadraticModel(Vartype.BINARY)
+
+    bqm.offset = 2
+
+    for var in vars:
+        bqm.add_variable(var, -2)
+
+    for i in range(len(vars)):
+        for j in range(i+1,len(vars)):
+            bqm.add_interaction(vars[i], vars[j],4)
+    return bqm

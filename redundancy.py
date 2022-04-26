@@ -1,9 +1,10 @@
-from typing import Dict, Set, List
+from typing import Dict, Set, List, Any, Tuple
 from dimod import BinaryQuadraticModel, Vartype
 from dwave.system import DWaveSampler
 
-from utils import evaluate_cnf_formula, matriarch8
+from utils import evaluate_cnf_formula, matriarch8, get_qubits_values
 from embedding_utils import get_qpu
+from neal import SimulatedAnnealingSampler
 
 
 def initialize_mirror_vars(variables: Set[int], mirrors: Dict[int, int],
@@ -154,18 +155,12 @@ def get_ancilla_to_connect(qpu, physical_var, bqm, chain):
 
 
 ####### transforming embedding #######
-def get_valid_edges(qpu, vars1, vars2):
-    valid_edges = set()
+def get_valid_edges(qpu, vars1, vars2) -> List[Tuple[int, int]]:
+    valid_edges = []
     for v1 in vars1:
         for v2 in vars2:
             if does_edge_exists(qpu, v1, v2):
-                if v1 < v2:
-                    e1 = v1
-                    e2 = v2
-                else:
-                    e1 = v2
-                    e2 = v1
-                valid_edges.add((e1, e2))
+                valid_edges.append((v1, v2))
     return valid_edges
 
 
@@ -201,162 +196,194 @@ def get_embedded_bqm(bqm, embedding):
     new_qubo = BinaryQuadraticModel(Vartype.BINARY)
 
     for (logic_variable, chain) in embedding.items():
-        weight = round(bqm.linear[logic_variable] / len(chain), 0)
+        weight = bqm.linear[logic_variable] / len(chain)
         for c in chain:
             new_qubo.add_variable(c, weight)
 
     for ((a, b), coupler) in bqm.quadratic.items():
         valid_edges = get_valid_edges(qpu, embedding[a], embedding[b])
-        weight = round(coupler / len(valid_edges), 0)
+        weight = coupler / len(valid_edges)
         for (v1, v2) in valid_edges:
             new_qubo.add_interaction(v1, v2, weight)
     new_qubo.offset = bqm.offset
     return new_qubo
 
 
-def get_valid_edges_variables(qpu: DWaveSampler, p_l1, p_l2):
-    valid_vars1 = set()
-    valid_vars2 = set()
-
-    for v1 in p_l1:
-        for v2 in p_l2:
-            if does_edge_exists(qpu, v1, v2):
-                valid_vars1.add(v1)
-                valid_vars2.add(v2)
-    return valid_vars1, valid_vars2
+def get_edge_weight(bqm, edge):
+    v1 = edge[0]
+    v2 = edge[1]
+    try:
+        assert(bqm.adj[v1][v2] == bqm.adj[v2][v1])
+        return abs(bqm.adj[v1][v2])
+    except:
+        return None
 
 
-def find_variables_in_embedding3(l1: int, l2: int, l3: int, embedding: Dict[int, List[int]], qpu: DWaveSampler):
-    print("vars:", l1, l2, l3)
-    p_l1 = embedding[l1]
-    p_l2 = embedding[l2]
-    p_l3 = embedding[l3]
-    print(p_l1)
-    print(p_l2)
-    print(p_l3)
-
-    valid_qubits1, valid_qubits2 = get_valid_edges_variables(qpu, p_l1, p_l2)
-    temp_valid_qubits1, valid_qubits3 = get_valid_edges_variables(qpu, p_l1, p_l3)
-    temp_valid_qubits2, temp_valid_qubits3 = get_valid_edges_variables(qpu, p_l2, p_l3)
-
-    print("valid qubits: ", valid_qubits1)
-    print("t_valid qubits: ", temp_valid_qubits1)
-    valid_qubits1 = valid_qubits1.intersection(temp_valid_qubits1)
-
-    print("intersection valid_qubits", valid_qubits1)
-    assert (len(valid_qubits1) > 0)
-
-    valid_qubits2 = valid_qubits2.intersection(temp_valid_qubits2)
-    assert (len(valid_qubits2) > 0)
-
-    valid_qubits3 = valid_qubits3.intersection(temp_valid_qubits3)
-    assert (len(valid_qubits3) > 0)
-
-    p1 = valid_qubits1.pop()
-    p2 = valid_qubits2.pop()
-    p3 = valid_qubits3.pop()
-
-    assert (p1 != p2 and p1 != p3 and p2 != p3)
-    return p1, p2, p3
-
-
-def find_variables_in_embedding2(l1: int, l2: int, embedding: Dict[int, List[int]], qpu: DWaveSampler):
+def find_edge_in_embedding(bqm, l1: int, l2: int, embedding: Dict[int, List[int]], qpu: DWaveSampler):
     p_l1 = embedding[l1]
     p_l2 = embedding[l2]
 
-    valid_qubits1, valid_qubits2 = get_valid_edges_variables(qpu, p_l1, p_l2)
+    valid_edges = get_valid_edges(qpu, p_l1, p_l2)
+    assert(len(valid_edges) > 0)
 
-    p1 = valid_qubits1.pop()
-    p2 = valid_qubits2.pop()
+    min_value = get_edge_weight(bqm, valid_edges[0])
+    current_min_index = 0
+    for (index,edge) in enumerate(valid_edges):
+        weight = get_edge_weight(bqm, edge)
+        if weight is not None:
+            if weight < min_value:
+                min_value = weight
+                current_min_index = index
 
+    answer_edge = valid_edges[current_min_index]
+    p1 = answer_edge[0]
+    p2 = answer_edge[1]
     assert (p1 != p2 )
     return p1, p2
 
-def emb_logic_or(bqm, or_dict, variables, embedding, qpu, temp_x1, temp_x2, is_res_fixed=False):
-    if temp_x1 < temp_x2:
-        temp_res = or_dict[(temp_x1, temp_x2)]
-    else:
-        temp_res = or_dict[(temp_x2, temp_x1)]
+def get_linear_var_in_embedding(bqm, embedding, l1):
+    p_vars = embedding[l1]
 
+    min_val = 0
+    min_val_index = -1
+    for (index, p_var) in enumerate(p_vars):
+        if p_var in bqm.variables:
+            if min_val_index == -1 :
+                min_val = abs(bqm.linear[p_var])
+                min_val_index = index
+            elif min_val >  abs(bqm.linear[p_var]):
+                min_val = abs(bqm.linear[p_var])
+                min_val_index = index
+
+    if min_val_index == -1:
+        min_val_index = 0
+
+    return p_vars[min_val_index]
+
+
+
+
+
+def emb_logic_or(bqm, or_dict, embedding, qpu, temp_x1, temp_x2, is_res_fixed=False, clause_index=None):
+
+    if clause_index == None:
+        raise Exception("clause index is None")
+
+    x1 = get_linear_var_in_embedding(bqm, embedding, abs(temp_x1))
+    x2 = get_linear_var_in_embedding(bqm, embedding, abs(temp_x2))
 
     if is_res_fixed:
-        x1,x2 = find_variables_in_embedding2(abs(temp_x1), abs(temp_x2), embedding, qpu)
-        res = str(temp_res) + "a"
+        res = "a1"
+        x12, x21 = find_edge_in_embedding(bqm, abs(temp_x1), abs(temp_x2), embedding, qpu)
+        x13 = x1
+        x31 = res
+        x23 = x2
+        x32 = res
+        temp_res = "a1"
     else:
-        x1, x2, res = find_variables_in_embedding3(abs(temp_x1), abs(temp_x2), temp_res, embedding, qpu)
-    if x1 > 0:
-        if x2 > 0:
-            assert (x1 > 0 and x2 > 0)
+        if temp_x1 < temp_x2:
+            temp_res = or_dict[clause_index][(temp_x1, temp_x2)]
+        else:
+            temp_res = or_dict[clause_index][(temp_x2, temp_x1)]
+        res = get_linear_var_in_embedding(bqm, embedding, temp_res)
+        x12, x21 = find_edge_in_embedding(bqm, abs(temp_x1), abs(temp_x2), embedding, qpu)
+        x13, x31 = find_edge_in_embedding(bqm, abs(temp_x1), temp_res, embedding, qpu)
+        x23, x32 = find_edge_in_embedding(bqm, abs(temp_x2), temp_res, embedding, qpu)
+
+    if temp_x1 > 0:
+        if temp_x2 > 0:
+            assert (temp_x1 > 0 and temp_x2 > 0)
             # perform traditional logic or
             bqm.add_variable(x1, 2)
             bqm.add_variable(x2, 2)
             bqm.add_variable(res, 2)
 
-            bqm.add_interaction(x1, x2, 2)
-            bqm.add_interaction(x1, res, -4)
-            bqm.add_interaction(x2, res, -4)
+            bqm.add_interaction(x12, x21, 2)
+            bqm.add_interaction(x13, x31, -4)
+            bqm.add_interaction(x23, x32, -4)
             # logic or has offset 0
         else:
-            assert (x1 > 0 and x2 < 0)
+            assert (temp_x1 > 0 and temp_x2 < 0)
             # compute truth table with negated value of x2 (MATRIARCH8)
             prev_offset = bqm.offset
-            matriarch8(bqm, x1, abs(x2), res)
+            matriarch8(bqm, x1, x2, res, x12, x21, x13, x31, x23, x32)
             assert (prev_offset + 2 == bqm.offset)
-    elif x2 > 0:
-        assert (x1 < 0 and x2 > 0)
+    elif temp_x2 > 0:
+        assert (temp_x1 < 0 and temp_x2 > 0)
         # compute truth table with negated value of x1 (MATRIARCH8)
         prev_offset = bqm.offset
-        matriarch8(bqm, x2, abs(x1), res)
+        matriarch8(bqm, x2, x1, res, x12, x21, x13, x31, x23, x32)
         assert (prev_offset + 2 == bqm.offset)
     else:
-        assert (x1 < 0 and x2 < 0)
+        assert (temp_x1 < 0 and temp_x2 < 0)
         # compute NAND
-        bqm.add_variable(abs(x1), -4 / 2)
-        bqm.add_variable(abs(x2), -4 / 2)
+        bqm.add_variable(x1, -4 / 2)
+        bqm.add_variable(x2, -4 / 2)
         bqm.add_variable(res, -6 / 2)
-        bqm.add_interaction(abs(x1), abs(x2), 2 / 2)
-        bqm.add_interaction(abs(x1), res, 4 / 2)
-        bqm.add_interaction(abs(x2), res, 4 / 2)
+        bqm.add_interaction(x12, x21, 2 / 2)
+        bqm.add_interaction(x13, x31, 4 / 2)
+        bqm.add_interaction(x23, x32, 4 / 2)
         bqm.offset += 6 / 2
 
-    return res
+    return res, temp_res
 
 
-def emb_clause_to_bqm(bqm, or_dict, embedding, qpu, variables, clause):
-    print(clause)
+def emb_clause_to_bqm(bqm: BinaryQuadraticModel, or_dict, embedding, qpu, clause: list[int],
+                      clause_index: int):
+
     if len(clause) == 0:
         raise Exception("clause has length 0")
 
-    temp = emb_logic_or(bqm, or_dict, variables, embedding, qpu, clause[0], clause[1], len(clause) == 2)
-
+    temp, temp_res = emb_logic_or(bqm, or_dict, embedding, qpu, clause[0], clause[1], len(clause) == 2, clause_index)
     for (i,x) in enumerate(clause[2:]):
-        is_res_fixed = (i == len(clause)-1)
-        prev = temp
-        temp = emb_logic_or(bqm, or_dict, variables, embedding, qpu, prev, x, is_res_fixed)
-
+        is_res_fixed = (i == len(clause)-3)
+        prev = temp_res
+        temp, temp_res = emb_logic_or(bqm, or_dict, embedding, qpu, prev, x, is_res_fixed, clause_index)
 
     bqm.fix_variable(temp, 1)
 
 
-def get_or_dict(or_result_vars):
+def get_or_dict(or_result_vars: Dict[int, Any], res_vars_to_clause_index: Dict[int, int], num_clauses: int):
     answer = dict()
+
+    for i in range(num_clauses):
+        answer[i] = dict()
+
     for (res_var, (_, i1, i2)) in or_result_vars.items():
-        print("or_dict:",res_var, i1, i2)
         assert(i1 != i2)
-        assert ((i1, i2) not in answer.keys())
-        assert ((i2, i1) not in answer.keys())
+        assert(res_var in res_vars_to_clause_index.keys())
+
+        clause_index = res_vars_to_clause_index[res_var]
         if i1 < i2:
-            answer[(i1,i2)] = res_var
+            key = (i1, i2)
         else:
-            answer[(i2, i1)] = res_var
+            key = (i2, i1)
+        assert(key not in answer[clause_index].keys())
+        answer[clause_index][key] = res_var
     return answer
 
-def emb_cnf_to_bqm(embedding, or_result_vars, num_variables, variables, clauses):
+def emb_cnf_to_bqm(embedding: Dict[int, List[int]], or_result_vars, num_variables, variables, clauses,
+                   res_vars_to_clause_index = None):
+    if res_vars_to_clause_index == None:
+        raise Exception("no clauses indices")
+
     assert (num_variables == len(variables))
     qpu = get_qpu()
     bqm: BinaryQuadraticModel = BinaryQuadraticModel(Vartype.BINARY)
-    or_dict = get_or_dict(or_result_vars)
 
-    for clause in clauses:
-        emb_clause_to_bqm(bqm, or_dict, embedding, qpu, variables, clause)
+    or_dict = get_or_dict(or_result_vars, res_vars_to_clause_index, len(clauses))
+
+    for (index, clause) in enumerate(clauses):
+        emb_clause_to_bqm(bqm, or_dict, embedding, qpu, clause, index)
     return bqm
+
+
+def emb_evaluate_cnf_formula(embedding: dict[int, List[int]], or_vars, answer, bqm, bqm2 ):
+    all_values = get_qubits_values(answer, or_vars, bqm)
+
+    emb_values = dict()
+
+    for (logic_var, chain) in embedding.items():
+        for c in chain:
+            emb_values[c] = all_values[logic_var]
+    return bqm2.energy(emb_values)
