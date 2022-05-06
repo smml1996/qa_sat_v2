@@ -39,15 +39,15 @@ def create_all_variables(variables: Set[int]) -> BinaryQuadraticModel:
         bqm.add_variable(var)
     return bqm
 
-def matriarch8(bqm: BinaryQuadraticModel, x1: int, x2: int, res: int,x12, x21, x13, x31, x23, x32) -> None:
+def matriarch8(bqm: BinaryQuadraticModel, x1: int, x2: int, res: int) -> None:
     assert (x1 > 0 and x2 > 0)
     bqm.add_variable(x1, 4)
     bqm.add_variable(x2, -2)
     bqm.add_variable(res, -2)
 
-    bqm.add_interaction(x12, x21, -2)
-    bqm.add_interaction(x13, x31, -4)
-    bqm.add_interaction(x23, x32, 4)
+    bqm.add_interaction(x1, x2, -2)
+    bqm.add_interaction(x1, res, -4)
+    bqm.add_interaction(x2, res, 4)
 
     bqm.offset += 2
 
@@ -93,29 +93,28 @@ def logic_or(bqm: BinaryQuadraticModel, variables: Set[int], x1: int, x2: int) -
     else:
         assert(x1 < 0 and x2 < 0)
         # compute NAND
-        bqm.add_variable(abs(x1), -4)
-        bqm.add_variable(abs(x2), -4)
-        bqm.add_variable(res, -6)
-        bqm.add_interaction(abs(x1), abs(x2), 2)
-        bqm.add_interaction(abs(x1), res, 4)
-        bqm.add_interaction(abs(x2), res, 4)
-        bqm.offset += 6
+        bqm.add_variable(abs(x1), -4/2)
+        bqm.add_variable(abs(x2), -4/2)
+        bqm.add_variable(res, -6/2)
+        bqm.add_interaction(abs(x1), abs(x2), 2/2)
+        bqm.add_interaction(abs(x1), res, 4/2)
+        bqm.add_interaction(abs(x2), res, 4/2)
+        bqm.offset += 6/2
         gate_type = GateType.NAND
 
     return res, gate_type
 
 def only_one_true(vars) -> BinaryQuadraticModel:
-    assert(len(vars) == 5)
     bqm = BinaryQuadraticModel(Vartype.BINARY)
 
-    bqm.offset = 2
+    bqm.offset = 2/2
 
     for var in vars:
-        bqm.add_variable(abs(var), -2)
+        bqm.add_variable(abs(var), -2/2)
 
     for i in range(len(vars)):
         for j in range(i+1,len(vars)):
-            bqm.add_interaction(abs(vars[i]), abs(vars[j]),4)
+            bqm.add_interaction(abs(vars[i]), abs(vars[j]),4/2)
     return bqm
 
 def clause_to_bqm(bqm: BinaryQuadraticModel, variables: Set[int], clause: List[int], clause_index=None) \
@@ -131,9 +130,9 @@ def clause_to_bqm(bqm: BinaryQuadraticModel, variables: Set[int], clause: List[i
     or_result_vars = dict()
     res_vars_to_clause_index = dict()
 
-    if len(clause) == 5:
-        bqm.update(only_one_true(clause))
-        return None, or_result_vars, res_vars_to_clause_index
+    # if len(clause) > 2:
+    #     bqm.update(only_one_true(clause))
+    #     return None, or_result_vars, res_vars_to_clause_index
 
     temp, gate_type = logic_or(bqm, variables, clause[0], clause[1])
     or_result_vars[temp] = (gate_type, clause[0], clause[1])
@@ -232,8 +231,8 @@ def get_greedy_quantum_sampler(embedding=None):
         FixedEmbeddingComposite(DWaveSampler(solver={"name": "Advantage_system4.1"}), embedding))
     return sampler
 
-def minimize_qubo(bqm):
-    return roof_duality(bqm)
+def minimize_qubo(bqm, _strict=True):
+    return roof_duality(bqm, strict=_strict)
 
 
 def get_avg_energy(sampleset):
@@ -242,16 +241,193 @@ def get_avg_energy(sampleset):
         energies.append(s[1])
     return round(sum(energies)/len(energies), 2)
 
-def only_one_true(vars) -> BinaryQuadraticModel:
-    assert(len(vars) == 5)
+def process_unicorn_file(path: str) -> BinaryQuadraticModel:
     bqm = BinaryQuadraticModel(Vartype.BINARY)
+    file = open(path)
+    section = 0
+    for line in file.readlines():
+        line = line.replace("\n", "")
 
-    bqm.offset = 2
+        if line == "":
+            section+=1
+        else:
 
-    for var in vars:
-        bqm.add_variable(var, -2)
-
-    for i in range(len(vars)):
-        for j in range(i+1,len(vars)):
-            bqm.add_interaction(vars[i], vars[j],4)
+            elements = line.split(" ")
+            if section == 0:
+                assert(len(elements) == 2)
+                bqm.offset = float(elements[1])
+            elif section == 1:
+                assert(len(elements) == 3)
+            elif section == 2:
+                assert(len(elements) == 3)
+            elif section == 3:
+                assert(len(elements) == 2)
+                var = int(elements[0])
+                bias = float(elements[1])
+                bqm.add_variable(var, bias)
+            elif section == 4:
+                assert(len(elements) == 3)
+                var1 = int(elements[0])
+                var2 = int(elements[1])
+                coupler = float(elements[2])
+                bqm.add_interaction(var1, var2, coupler)
     return bqm
+
+
+def fix_constant_integer(bqm, variables, n):
+    for var in variables:
+        bqm.fix_variable(var, n%2)
+        n/=2
+
+def get_long_clauses(threshold, clauses):
+    answer = []
+    for clause in clauses:
+        if len(clause) >= threshold:
+            answer.append(clause)
+    return answer
+
+
+def xor_variables(num_variables, var1, var2):
+    current_var = num_variables
+    current_var +=1
+    z = current_var
+    answer = []
+    answer.append([var1, var2, -z])
+    answer.append([var1, -var2, z])
+    answer.append([-var1, var2, z])
+    answer.append([-var1, -var2, -z])
+    return current_var, answer
+
+# def xor_clause(num_variables, clause):
+#     assert(len(clause) > 2)
+#     current_var = num_variables
+#     prev_result = clause[0]
+#     answer = []
+#     new_variables_mapping = dict()
+#     for i in range(1, len(clause)):
+#         current_var, new_clauses = xor_variables(current_var, prev_result, clause[i])
+#         new_variables_mapping[current_var] = (prev_result, clause[i])
+#         answer.extend(new_clauses)
+#     return current_var, answer, new_variables_mapping
+
+def xor_clause(num_variables, clause):
+    x4 = clause[0]
+    x3 = clause[1]
+    x2 = clause[2]
+    x1 = clause[3]
+    x0 = clause[4]
+    answer = []
+
+    # (x4 ∨ x3 ∨ x2 ∨ x1 ∨ x0)
+    # answer.append(clause)
+
+    # (x4 ∨ x3 ∨ x2 ∨ ¬x1 ∨ ¬x0)
+    answer.append([x4,x3,x2,-x1,-x0])
+
+    # (x4 ∨ x3 ∨ ¬x2 ∨ x1 ∨ ¬x0)
+    answer.append([x4,x3,-x2,x1,-x0])
+
+    # (x4 ∨ x3 ∨ ¬x2 ∨ ¬x1 ∨ x0)
+    answer.append([x4, x3, -x2, -x1, x0])
+
+    # ( x4 ∨ x3 ∨ ¬x2 ∨ ¬x1 ∨ ¬x0)
+    answer.append([x4, x3, -x2, -x1, -x0])
+
+    # (x4 ∨ ¬x3 ∨ x2 ∨ x1 ∨ ¬x0)
+    answer.append([x4, -x3, x2, x1, -x0])
+
+    # ( x4 ∨ ¬x3 ∨ x2 ∨ ¬x1 ∨ x0)
+    answer.append([x4, -x3, x2, -x1, x0])
+
+    # (x4 ∨ ¬x3 ∨ x2 ∨ ¬x1 ∨ ¬x0)
+    answer.append([x4, -x3, x2, -x1, -x0])
+
+    # (x4 ∨ ¬x3 ∨ ¬x2 ∨ x1 ∨ x0)
+    answer.append([x4, -x3, -x2, x1, x0])
+
+    # (x4 ∨ ¬x3 ∨ ¬x2 ∨ x1 ∨ ¬x0)
+    answer.append([x4, -x3, -x2, x1, -x0])
+
+    # (x4 ∨ ¬x3 ∨ ¬x2 ∨ ¬x1 ∨ x0)
+    answer.append([x4, -x3, -x2, -x1, x0])
+
+    # (x4 ∨ ¬x3 ∨ ¬x2 ∨ ¬x1 ∨ ¬x0)
+    answer.append([x4, -x3, -x2, -x1, -x0])
+
+    # (¬x4 ∨ x3 ∨ x2 ∨ x1 ∨ ¬x0)
+    answer.append([-x4, x3, x2, x1, -x0])
+
+    # (¬x4 ∨ x3 ∨ x2 ∨ ¬x1 ∨ x0)
+    answer.append([-x4, x3, x2, -x1, x0])
+
+    # (¬x4 ∨ x3 ∨ x2 ∨ ¬x1 ∨ ¬x0)
+    answer.append([-x4, x3, x2, -x1, -x0])
+
+    # (¬x4 ∨ x3 ∨ ¬x2 ∨ x1 ∨ x0)
+    answer.append([-x4, x3, -x2, x1, x0])
+
+    # (¬x4 ∨ x3 ∨ ¬x2 ∨ x1 ∨ ¬x0)
+    answer.append([-x4, x3, -x2, x1, -x0])
+
+    # (¬x4 ∨ x3 ∨ ¬x2 ∨ ¬x1 ∨ x0)
+    answer.append([-x4, x3, -x2, -x1, x0])
+
+    # (¬x4 ∨ x3 ∨ ¬x2 ∨ ¬x1 ∨ ¬x0)
+    answer.append([-x4, x3, -x2, -x1, -x0])
+
+    # (¬x4 ∨ ¬x3 ∨ x2 ∨ x1 ∨ x0)
+    answer.append([-x4,-x3, x2, x1, x0])
+
+    # (¬x4 ∨ ¬x3 ∨ x2 ∨ x1 ∨ ¬x0)
+    answer.append([-x4, -x3, x2, x1, -x0])
+
+    # (¬x4 ∨ ¬x3 ∨ x2 ∨ ¬x1 ∨ x0)
+    answer.append([-x4, -x3, x2, -x1, x0])
+
+    # (¬x4 ∨ ¬x3 ∨ x2 ∨ ¬x1 ∨ ¬x0)
+    answer.append([-x4, -x3, x2, -x1, -x0])
+
+    # (¬x4 ∨ ¬x3 ∨ ¬x2 ∨ x1 ∨ x0)
+    answer.append([-x4, -x3, -x2, x1, x0])
+
+    # (¬x4 ∨ ¬x3 ∨ ¬x2 ∨ x1 ∨ ¬x0)
+    answer.append([-x4, -x3, -x2, x1, -x0])
+
+    # (¬x4 ∨ ¬x3 ∨ ¬x2 ∨ ¬x1 ∨ x0)
+    answer.append([-x4, -x3, -x2, -x1, x0])
+
+    # (¬x4 ∨ ¬x3 ∨ ¬x2 ∨ ¬x1 ∨ ¬x0)
+    answer.append([-x4, -x3, -x2, -x1, -x0])
+
+    return num_variables, answer, {}
+
+
+def xor_clauses(clauses, num_variables):
+    current_var = num_variables
+    answer = []
+    mapping = dict()
+    for clause in clauses:
+        current_var, new_clauses, new_mapping = xor_clause(current_var, clause)
+        answer.extend(new_clauses)
+        mapping.update(new_mapping)
+    return answer, current_var, mapping
+
+def resolve_xor_clauses(answer, mapping):
+    for (key, value) in mapping.items():
+        var1 = bool(answer[abs(value[0])])
+        var2 = bool(answer[abs(value[1])])
+        answer[key] = int(var1 or var2)
+
+def dump_clauses_to_cnf_file(output_file, clauses, num_variables):
+    file = open(output_file, "w")
+    file.write(f"p cnf {num_variables} {len(clauses)}\n")
+
+    for clause in clauses:
+        line = ""
+        for var in clause:
+            if len(line) > 0:
+                line+=" "
+            line += f"{var}"
+        line+=" 0\n"
+        file.write(line)
+    file.close()

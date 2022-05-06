@@ -4,7 +4,7 @@ from dimod import BinaryQuadraticModel
 
 
 def get_pegasus_qpu():
-    return DWaveSampler(solver={'topology__type': 'pegasus'})
+    return DWaveSampler(solver={"name": "Advantage_system4.1"})
 
 
 def get_embedding(bqm: BinaryQuadraticModel, random_seed: int = 1):
@@ -47,7 +47,7 @@ def get_qubits_used(embedding):
 
 
 def get_qpu():
-    return DWaveSampler(solver={'topology__type': 'pegasus'})
+    return DWaveSampler(solver={"name": "Advantage_system4.1"})
 
 
 def get_qubit_offset_ranges():
