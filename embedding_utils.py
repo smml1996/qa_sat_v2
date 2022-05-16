@@ -1,14 +1,16 @@
 from minorminer import find_embedding
 from dwave.system import DWaveSampler
 from dimod import BinaryQuadraticModel
+from statistics import variance
+from minorminer import busclique
+import dwave_networkx as dnx
 
 
 def get_pegasus_qpu():
     return DWaveSampler(solver={"name": "Advantage_system4.1"})
 
 
-def get_embedding(bqm: BinaryQuadraticModel, random_seed: int = 1):
-    qpu_pegasus = get_pegasus_qpu()
+def get_embedding(bqm: BinaryQuadraticModel, qpu_pegasus, random_seed: int = 1):
     return find_embedding(bqm.quadratic.keys(), qpu_pegasus.edgelist, random_seed=random_seed)
 
 
@@ -105,3 +107,40 @@ def find_qubit(physical_var, embedding):
                 return logic_var
     return -1
 
+
+def find_best_embedding(bqm, qpu, top=100):
+    best_embedding = find_embedding(bqm.quadratic.keys(), qpu.edgelist, random_seed=1)
+    best_embedding_seed = 1
+    best_embedding_chain_lengths, _ = get_chain_lengths(bqm,best_embedding)
+
+    for i in range(2, top+1):
+        embedding = find_embedding(bqm.quadratic.keys(), qpu.edgelist, random_seed=i)
+        chain_lengths, _ = get_chain_lengths(bqm, embedding)
+        if max(chain_lengths) < max(best_embedding_chain_lengths):
+            best_embedding_seed = i
+            best_embedding = embedding
+            best_embedding_chain_lengths = chain_lengths
+        elif max(chain_lengths) == max(best_embedding_chain_lengths):
+            if variance(chain_lengths) < variance(best_embedding_chain_lengths):
+                best_embedding_seed = i
+                best_embedding = embedding
+                best_embedding_chain_lengths = chain_lengths
+            elif variance(chain_lengths) == variance(best_embedding_chain_lengths):
+                if count_qubits_used(embedding) == count_qubits_used(best_embedding):
+                    best_embedding_seed = i
+                    best_embedding = embedding
+                    best_embedding_chain_lengths = chain_lengths
+
+    print("best embedding random_seed", best_embedding_seed)
+    print("best embedding max_chain_length", max(best_embedding_chain_lengths))
+    print("best embedding qubits used", count_qubits_used(best_embedding))
+    print("best embedding variance:", variance(best_embedding_chain_lengths))
+    return best_embedding, best_embedding_seed
+
+def get_clique_embedding(bqm, qpu, seed_=1):
+    embedding = busclique.find_clique_embedding(bqm.linear.keys(), qpu, seed=seed_)
+    chain_lengths, _ = get_chain_lengths(bqm, embedding)
+    print("best embedding max_chain_length", max(chain_lengths))
+    print("best embedding qubits used", count_qubits_used(embedding))
+    print("best embedding variance:", variance(chain_lengths))
+    return embedding

@@ -219,10 +219,12 @@ def get_qubits_values(values, or_gates, bqm):
             all_values[i] = int(evaluate_gate(gate_type, bool(all_values[abs(x1)]), bool(all_values[abs(x2)])))
 
     return all_values
+
+
 def evaluate_cnf_formula(values: Dict[int, int], or_gates: Dict[int, Tuple[GateType, int, int]], bqm: BinaryQuadraticModel) -> float:
 
     all_values = get_qubits_values(values, or_gates, bqm)
-    assert len(bqm.variables) == len(all_values.keys())
+    # assert len(bqm.variables) == len(all_values.keys())
     return bqm.energy(all_values)
 
 
@@ -230,6 +232,28 @@ def get_greedy_quantum_sampler(embedding=None):
     sampler = SteepestDescentComposite(
         FixedEmbeddingComposite(DWaveSampler(solver={"name": "Advantage_system4.1"}), embedding))
     return sampler
+
+
+def get_quantum_sampler(embedding=None):
+    sampler = FixedEmbeddingComposite(DWaveSampler(solver={"name": "Advantage_system4.1"}), embedding)
+    return sampler
+
+def sample_with_sampler(embedding, bqm, num_reads_, chain_strengh_, clauses):
+    sampler = get_quantum_sampler(embedding)
+    sampleset = sampler.sample(bqm, num_reads=num_reads_, chain_strength=chain_strengh_, auto_scale=True)
+
+    lowest_energy = sampleset.first.energy
+    print("lowest energy achieved:", lowest_energy)
+
+    if lowest_energy == 0.0:
+        print(f"ground energy samples {len(sampleset.lowest())}/{num_reads_}")
+        for sample in sampleset.lowest():
+            assert (bqm.energy(sample) == 0.0)
+            assert (evaluate_clauses(sample, clauses))
+        return round(len(sampleset.lowest())/num_reads_,2)
+    else:
+        print(f"ground energy samples 0/{num_reads_}")
+        return 0
 
 def minimize_qubo(bqm, _strict=True):
     return roof_duality(bqm, strict=_strict)
