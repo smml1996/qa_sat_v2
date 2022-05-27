@@ -10,8 +10,11 @@ def get_pegasus_qpu():
     return DWaveSampler(solver={"name": "Advantage_system4.1"})
 
 
-def get_embedding(bqm: BinaryQuadraticModel, qpu_pegasus, random_seed: int = 1):
-    return find_embedding(bqm.quadratic.keys(), qpu_pegasus.edgelist, random_seed=random_seed)
+def get_embedding(bqm: BinaryQuadraticModel, qpu_pegasus, random_seed: int = 1, isnetworkx=False):
+    if isnetworkx:
+        return find_embedding(bqm.quadratic.keys(), qpu_pegasus.edges, random_seed=random_seed)
+    else:
+        return find_embedding(bqm.quadratic.keys(), qpu_pegasus.edgelist, random_seed=random_seed)
 
 
 def get_chain_lengths(bqm, _embedding):
@@ -108,13 +111,26 @@ def find_qubit(physical_var, embedding):
     return -1
 
 
-def find_best_embedding(bqm, qpu, top=100):
-    best_embedding = find_embedding(bqm.quadratic.keys(), qpu.edgelist, random_seed=1)
+def get_embedding_statistics(embedding):
+    chain_lengths = []
+    for (key, value) in embedding.items():
+        chain_lengths.append(len(value))
+    return max(chain_lengths), sum(chain_lengths), round(variance(chain_lengths),2)
+
+
+def find_best_embedding(bqm, qpu, isnetworkx=False, top=100):
+    if isnetworkx:
+        best_embedding = find_embedding(bqm.quadratic.keys(), qpu.edges, random_seed=1)
+    else:
+        best_embedding = find_embedding(bqm.quadratic.keys(), qpu.edgelist, random_seed=1)
     best_embedding_seed = 1
     best_embedding_chain_lengths, _ = get_chain_lengths(bqm,best_embedding)
 
     for i in range(2, top+1):
-        embedding = find_embedding(bqm.quadratic.keys(), qpu.edgelist, random_seed=i)
+        if isnetworkx:
+            embedding = find_embedding(bqm.quadratic.keys(), qpu.edges, random_seed=i)
+        else:
+            embedding = find_embedding(bqm.quadratic.keys(), qpu.edgelist, random_seed=i)
         chain_lengths, _ = get_chain_lengths(bqm, embedding)
         if max(chain_lengths) < max(best_embedding_chain_lengths):
             best_embedding_seed = i

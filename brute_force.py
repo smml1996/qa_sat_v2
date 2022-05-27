@@ -21,6 +21,22 @@ def get_percentage_satisfiable(variables, clauses):
             answer +=1
     return round(float(answer)/float(2**len(variables)),2)
 
+def get_count_satisfiable(variables, clauses, return_answers=False):
+    current_value = 0
+    answer = 0
+    sat_answers = []
+    while current_value < 2 ** len(variables):
+        answer_dict = get_values_dictionary(current_value, variables)
+        current_value += 1
+        if evaluate_clauses(answer_dict, clauses):
+            sat_answers.append(answer_dict)
+            answer += 1
+    if return_answers:
+        return answer, sat_answers
+    else:
+        return answer
+
+
 
 def get_random_instance(n_variables, n_clauses, seed, clause_width=3):
     cnf = RandomKCNF(clause_width, n_variables, n_clauses, seed)

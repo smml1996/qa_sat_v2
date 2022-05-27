@@ -193,6 +193,7 @@ def load_cnf(path: str) -> Tuple[int, int, Set[int], List[List[int]]]:
                 clause.append(int_x)
                 variables.add(abs(int_x))
             clauses.append(clause)
+    file.close()
     assert (num_variables != -1 and num_clauses != -1)
     return num_variables, num_clauses, variables, clauses
 
@@ -234,12 +235,12 @@ def get_greedy_quantum_sampler(embedding=None):
     return sampler
 
 
-def get_quantum_sampler(embedding=None):
-    sampler = FixedEmbeddingComposite(DWaveSampler(solver={"name": "Advantage_system4.1"}), embedding)
+def get_quantum_sampler(embedding=None, name="Advantage_system4.1"):
+    sampler = FixedEmbeddingComposite(DWaveSampler(solver={"name": name}), embedding)
     return sampler
 
-def sample_with_sampler(embedding, bqm, num_reads_, chain_strengh_, clauses):
-    sampler = get_quantum_sampler(embedding)
+def sample_with_sampler(embedding, bqm, num_reads_, chain_strengh_, clauses, name="Advantage_system4.1"):
+    sampler = get_quantum_sampler(embedding, name)
     sampleset = sampler.sample(bqm, num_reads=num_reads_, chain_strength=chain_strengh_, auto_scale=True)
 
     lowest_energy = sampleset.first.energy
@@ -442,8 +443,10 @@ def resolve_xor_clauses(answer, mapping):
         var2 = bool(answer[abs(value[1])])
         answer[key] = int(var1 or var2)
 
-def dump_clauses_to_cnf_file(output_file, clauses, num_variables):
+def dump_clauses_to_cnf_file(output_file, clauses, num_variables, comments=[]):
     file = open(output_file, "w")
+    for comment in comments:
+        file.write(f"c {comment}\n")
     file.write(f"p cnf {num_variables} {len(clauses)}\n")
 
     for clause in clauses:
@@ -455,3 +458,36 @@ def dump_clauses_to_cnf_file(output_file, clauses, num_variables):
         line+=" 0\n"
         file.write(line)
     file.close()
+
+def unicorn_file_parser(path) -> BinaryQuadraticModel:
+    bqm = BinaryQuadraticModel(Vartype.SPIN)
+    estimated_num_variables = None
+    file = open(path)
+
+    current_section = 0
+    for line in file.readlines():
+        if line == "\n":
+            current_section += 1
+        else:
+            elements = line.split(" ")
+            if current_section == 0:
+                estimated_num_variables = int(elements[0])
+                bqm.offset = float(elements[1])
+            elif current_section == 1:
+                pass
+            elif current_section == 2:
+                pass
+            elif current_section == 3:
+                qubit_id = int(elements[0])
+                bias = float(elements[1])
+                bqm.add_variable(qubit_id, bias)
+            elif current_section == 4:
+                qubit_id1 = int(elements[0])
+                qubit_id2 = int(elements[1])
+                bias = float(elements[2])
+                bqm.add_interaction(qubit_id1, qubit_id2, bias)
+            else:
+                raise Exception("this block of code should be unreachable")
+
+    file.close()
+    return bqm, estimated_num_variables
