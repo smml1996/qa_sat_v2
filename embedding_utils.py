@@ -160,3 +160,5 @@ def get_clique_embedding(bqm, qpu, seed_=1):
     print("best embedding qubits used", count_qubits_used(embedding))
     print("best embedding variance:", variance(chain_lengths))
     return embedding
+
+

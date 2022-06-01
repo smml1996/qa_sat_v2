@@ -460,7 +460,7 @@ def dump_clauses_to_cnf_file(output_file, clauses, num_variables, comments=[]):
     file.close()
 
 def unicorn_file_parser(path) -> BinaryQuadraticModel:
-    bqm = BinaryQuadraticModel(Vartype.SPIN)
+    bqm = BinaryQuadraticModel(Vartype.BINARY)
     estimated_num_variables = None
     file = open(path)
 
