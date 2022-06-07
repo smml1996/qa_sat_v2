@@ -3,7 +3,6 @@ from dwave.system import DWaveSampler
 from dimod import BinaryQuadraticModel
 from statistics import variance
 from minorminer import busclique
-from pysat.solvers import
 import dwave_networkx as dnx
 
 
