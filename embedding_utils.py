@@ -1,7 +1,7 @@
 from minorminer import find_embedding
 from dwave.system import DWaveSampler
 from dimod import BinaryQuadraticModel
-from statistics import variance
+from statistics import variance, median
 from minorminer import busclique
 import dwave_networkx as dnx
 
@@ -115,7 +115,7 @@ def get_embedding_statistics(embedding):
     chain_lengths = []
     for (key, value) in embedding.items():
         chain_lengths.append(len(value))
-    return max(chain_lengths), sum(chain_lengths), round(variance(chain_lengths),2)
+    return max(chain_lengths), sum(chain_lengths), round(variance(chain_lengths),2), sum(chain_lengths)/len(chain_lengths), median(chain_lengths)
 
 
 def find_best_embedding(bqm, qpu, isnetworkx=False, top=100):

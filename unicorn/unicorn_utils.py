@@ -2,18 +2,25 @@ import sys
 from greedy import SteepestDescentSolver
 import pandas as pd
 import numpy as np
-from statistics import variance
-
 sys.path.append("../")
 from embedding_utils import *
 from utils import *
 
 
-def get_vertices_degrees(bqm):
-    answer = []
-    for (node, neighbours) in bqm.adj.items():
-        answer.append(len(neighbours))
-    return answer
+def get_bqm_full_path(path):
+    bqm, _ = unicorn_file_parser(path)
+    return bqm
+
+
+def get_bqm_statistics_from_path(path):
+    bqm = get_bqm_full_path(path)
+    return get_bqm_statistics(bqm)
+
+
+def get_cnf_statistics_from_path(path):
+    num_variables, num_clauses, _, _ = load_cnf(path)
+
+    return {'vars': num_variables,'clauses': num_clauses}
 
 
 def get_file_bqm(file_name, prefix):
@@ -58,9 +65,13 @@ def get_input_values(sample, input_ids):
 
 def get_results_dataframe(file, input_ids, reads=100, bottom=0.25, top=5, is_pegasus=True, is_chimera=True,
                           is_local_search=True, random_seed_pegasus=None, random_seed_chimera=None,
-                          pegasus_qpu=None, chimera_qpu=None, experiments_folder=None):
+                          pegasus_qpu=None, chimera_qpu=None, experiments_folder=None, scale_bqm=None):
     solver_greedy = SteepestDescentSolver()
+
     bqm = get_file_bqm(file, experiments_folder)
+    if scale_bqm is not None:
+        print(f"QUBO scaled by {scale_bqm}")
+        bqm.scale(scale_bqm)
 
     chain_strengths = []
     energies = []
@@ -145,7 +156,7 @@ def get_percentage_ground_states(df, chain_strength):
     total_samples = temp_df.shape[0]
     print("total_samples:", total_samples)
     temp_df = temp_df[temp_df.energy == 0]
-    return round(temp_df.shape[0]/total_samples,2)
+    return round(temp_df.shape[0]/total_samples, 2)
 
 
 def get_best_chain_strength(filename, qpu='DW_2000Q_6'):
@@ -159,7 +170,7 @@ def get_best_chain_strength(filename, qpu='DW_2000Q_6'):
     # find_max
     for cs in chain_strengths:
         percentage = get_percentage_ground_states(df, cs)
-        if max_percentage == None:
+        if max_percentage is None:
             max_percentage = percentage
         else:
             max_percentage = max(max_percentage, percentage)
